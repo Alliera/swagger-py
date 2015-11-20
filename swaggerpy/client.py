@@ -9,11 +9,12 @@ import json
 import logging
 import os.path
 import re
-import six.moves.urllib as urllib
-import swaggerpy
 
 from swaggerpy.http_client import SynchronousHttpClient
 from swaggerpy.processors import WebsocketProcessor, SwaggerProcessor
+import swaggerpy
+from urllib.parse import urlencode, quote_plus
+
 
 log = logging.getLogger(__name__)
 
@@ -38,10 +39,11 @@ class Operation(object):
     """Operation object.
     """
 
-    def __init__(self, uri, operation, http_client):
+    def __init__(self, uri, operation, swagger_version, http_client):
         self.uri = uri
         self.json = operation
         self.http_client = http_client
+        self.swagger_version = swagger_version
 
     def __repr__(self):
         return "%s(%s)" % (self.__class__.__name__, self.json['nickname'])
@@ -52,9 +54,11 @@ class Operation(object):
         :param kwargs: ARI operation arguments.
         :return: Implementation specific response or WebSocket connection
         """
-        log.info("%s?%r" % (self.json['nickname'],
-                            urllib.parse.urlencode(kwargs)))
-        method = self.json['httpMethod']
+        log.info("%s?%r" % (self.json['nickname'], urlencode(kwargs)))
+        if self.swagger_version == "1.1":
+            method = self.json['httpMethod']
+        else:
+            method = self.json['method']
         uri = self.uri
         params = {}
         data = None
@@ -68,8 +72,7 @@ class Operation(object):
 
             if value is not None:
                 if param['paramType'] == 'path':
-                    uri = uri.replace('{%s}' % pname,
-                                      urllib.parse.quote_plus(str(value)))
+                    uri = uri.replace('{%s}' % pname, quote_plus(str(value)))
                 elif param['paramType'] == 'query':
                     params[pname] = value
                 elif param['paramType'] == 'body':
@@ -121,8 +124,9 @@ class Resource(object):
     :param http_client: HTTP client API
     """
 
-    def __init__(self, resource, http_client):
+    def __init__(self, resource, swagger_version, http_client):
         log.debug("Building resource '%s'" % resource['name'])
+        self.swagger_version = swagger_version
         self.json = resource
         decl = resource['api_declaration']
         self.http_client = http_client
@@ -175,7 +179,8 @@ class Resource(object):
         log.debug("Building operation %s.%s" % (
             self.get_name(), operation['nickname']))
         uri = decl['basePath'] + api['path']
-        return Operation(uri, operation, self.http_client)
+        return Operation(uri, operation,
+                         self.swagger_version, self.http_client)
 
 
 class SwaggerClient(object):
@@ -205,7 +210,9 @@ class SwaggerClient(object):
             loader.process_resource_listing(self.api_docs)
 
         self.resources = {
-            resource['name']: Resource(resource, http_client)
+            resource['name']: Resource(resource,
+                                       self.api_docs['swaggerVersion'],
+                                       http_client)
             for resource in self.api_docs['apis']}
 
     def __repr__(self):
